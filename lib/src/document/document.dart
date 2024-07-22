@@ -179,44 +179,25 @@ class Document {
   /// included in the result.
   /// Special case of no-selection at start of empty line: gets inline style(s) from preceding non-empty line.
   Style collectStyle(int index, int len) {
-    var res = queryChild(index);
+    final res = queryChild(index);
+    Style rangeStyle;
     if (len > 0) {
       return (res.node as Line).collectStyle(res.offset, len);
     }
-    //
     if (res.offset == 0) {
-      final current = (res.node as Line).collectStyle(0, 0);
-      //
-      while ((res.node as Line).length == 1 && index > 0) {
-        res = queryChild(--index);
-      }
-      //
-      final style = (res.node as Line).collectStyle(res.offset, 0);
-      final remove = <Attribute>{};
-      for (final attr in style.attributes.values) {
-        if (!Attribute.inlineKeys.contains(attr.key)) {
-          if (!current.containsKey(attr.key)) {
-            remove.add(attr);
-          }
-        }
-      }
-      if (remove.isNotEmpty) {
-        return style.removeAll(remove);
-      }
-      return style;
+      return rangeStyle = (res.node as Line).collectStyle(res.offset, len);
     }
-    //
-    final style = (res.node as Line).collectStyle(res.offset - 1, 0);
-    final linkAttribute = style.attributes[Attribute.link.key];
+    rangeStyle = (res.node as Line).collectStyle(res.offset - 1, len);
+    final linkAttribute = rangeStyle.attributes[Attribute.link.key];
     if ((linkAttribute != null) &&
         (linkAttribute.value !=
             (res.node as Line)
                 .collectStyle(res.offset, len)
                 .attributes[Attribute.link.key]
                 ?.value)) {
-      return style.removeAll({linkAttribute});
+      return rangeStyle.removeAll({linkAttribute});
     }
-    return style;
+    return rangeStyle;
   }
 
   /// Returns all styles and Embed for each node within selection
