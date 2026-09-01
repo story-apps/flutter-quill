@@ -43,6 +43,13 @@ class QuillRawEditorConfig {
     this.contextMenuBuilder = defaultContextMenuBuilder,
     this.showSelectionHandles = false,
     this.textCapitalization = TextCapitalization.none,
+    this.spellCheckConfiguration = const SpellCheckConfiguration(
+      misspelledTextStyle: TextStyle(
+        decoration: TextDecoration.underline,
+        decorationColor: Colors.red,
+        decorationStyle: TextDecorationStyle.wavy,
+      ),
+    ),
     this.maxHeight,
     this.minHeight,
     this.maxContentWidth,
@@ -327,6 +334,9 @@ class QuillRawEditorConfig {
   ///
   /// See also: https://github.com/flutter/flutter/blob/06b9f7ba0bef2b5b44a643c73f4295a096de1202/packages/flutter/lib/src/services/text_input.dart#L621-L626
   final Brightness? keyboardAppearance;
+
+  /// Controls native spelling, misspelling decoration and suggestions.
+  final SpellCheckConfiguration spellCheckConfiguration;
 
   /// If true, then long-pressing this TextField will select text and show the
   /// cut/copy/paste menu, and tapping will move the text caret.

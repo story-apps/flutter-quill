@@ -303,6 +303,7 @@ class QuillEditorState extends State<QuillEditor>
           opacityAnimates: cursorOpacityAnimates,
         ),
         textCapitalization: config.textCapitalization,
+        spellCheckConfiguration: config.spellCheckConfiguration,
         minHeight: config.minHeight,
         maxHeight: config.maxHeight,
         maxContentWidth: config.maxContentWidth,
