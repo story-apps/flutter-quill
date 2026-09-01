@@ -20,6 +20,90 @@ void main() {
   });
 
   group('QuillEditor', () {
+    test('native spell checking is enabled by default and copied', () {
+      const config = QuillEditorConfig();
+
+      expect(config.spellCheckConfiguration.spellCheckEnabled, isTrue);
+      expect(
+        config
+            .copyWith(
+              spellCheckConfiguration:
+                  const SpellCheckConfiguration.disabled(),
+            )
+            .spellCheckConfiguration
+            .spellCheckEnabled,
+        isFalse,
+      );
+    });
+
+    testWidgets('forwards spell checking to the raw editor', (tester) async {
+      final controller = QuillController.basic();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: QuillEditor.basic(
+            controller: controller,
+            config: const QuillEditorConfig(
+              spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+            ),
+          ),
+        ),
+      );
+
+      final rawEditor = tester.widget<QuillRawEditor>(
+        find.byType(QuillRawEditor),
+      );
+      expect(
+        rawEditor.config.spellCheckConfiguration.spellCheckEnabled,
+        isFalse,
+      );
+    });
+
+    testWidgets('decorates misspellings and exposes native replacements', (
+      tester,
+    ) async {
+      final editorKey = GlobalKey<QuillRawEditorState>();
+      controller.document = Document()..insert(0, 'wrold');
+      controller.updateSelection(
+        const TextSelection.collapsed(offset: 2),
+        ChangeSource.local,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          locale: const Locale('en'),
+          home: QuillEditor.basic(
+            controller: controller,
+            config: QuillEditorConfig(
+              editorKey: editorKey,
+              spellCheckConfiguration: SpellCheckConfiguration(
+                spellCheckService: _FakeSpellCheckService(),
+                misspelledTextStyle: const TextStyle(
+                  decoration: TextDecoration.underline,
+                  decorationStyle: TextDecorationStyle.wavy,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(editorKey.currentState!.spellCheckResults, isNotNull);
+      expect(
+        tester.widgetList<RichText>(find.byType(RichText)).any(
+          (richText) => _hasWavyUnderline(richText.text),
+        ),
+        isTrue,
+      );
+      final replacement = editorKey.currentState!.contextMenuButtonItems
+          .singleWhere((item) => item.label == 'world');
+      replacement.onPressed();
+
+      expect(controller.document.toPlainText(), 'world\n');
+    });
+
     testWidgets('Keyboard entered text is stored in document', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
@@ -226,4 +310,24 @@ void main() {
       },
     );
   });
+}
+
+class _FakeSpellCheckService implements SpellCheckService {
+  @override
+  Future<List<SuggestionSpan>> fetchSpellCheckSuggestions(
+    Locale locale,
+    String text,
+  ) async => const [
+    SuggestionSpan(TextRange(start: 0, end: 5), ['world']),
+  ];
+}
+
+bool _hasWavyUnderline(InlineSpan span) {
+  if (span.style?.decorationStyle == TextDecorationStyle.wavy) return true;
+  var found = false;
+  span.visitChildren((child) {
+    found = found || _hasWavyUnderline(child);
+    return !found;
+  });
+  return found;
 }

@@ -1,10 +1,11 @@
-import 'dart:async' show StreamSubscription;
+import 'dart:async' show StreamSubscription, Timer;
 import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:math' as math;
 import 'dart:ui' as ui hide TextStyle;
 
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
+import 'package:flutter/gestures.dart' show GestureRecognizer;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
@@ -53,6 +54,22 @@ class QuillRawEditorState extends EditorState
   KeyboardVisibilityController? _keyboardVisibilityController;
   StreamSubscription<bool>? _keyboardVisibilitySubscription;
   bool _keyboardVisible = false;
+
+  Timer? _spellCheckTimer;
+  SpellCheckResults? _spellCheckResults;
+  SpellCheckService? _spellCheckService;
+
+  /// The latest native spell-check result, exposed for custom context menus.
+  SpellCheckResults? get spellCheckResults => _spellCheckResults;
+
+  bool get _spellCheckEnabled =>
+      !widget.config.readOnly &&
+      widget.config.spellCheckConfiguration.spellCheckEnabled &&
+      (widget.config.spellCheckConfiguration.spellCheckService != null ||
+          WidgetsBinding
+              .instance
+              .platformDispatcher
+              .nativeSpellCheckServiceDefined);
 
   // Selection overlay
   @override
@@ -175,33 +192,71 @@ class QuillRawEditorState extends EditorState
   /// platform's default selection menu for [QuillRawEditor].
   /// Copied from [EditableTextState].
   List<ContextMenuButtonItem> get contextMenuButtonItems {
-    return EditableText.getEditableButtonItems(
-      clipboardStatus: (_clipboardStatus != null)
-          ? _clipboardStatus!.value
-          : null,
-      onCopy: copyEnabled
-          ? () => copySelection(SelectionChangedCause.toolbar)
-          : null,
-      onCut: cutEnabled
-          ? () => cutSelection(SelectionChangedCause.toolbar)
-          : null,
-      onPaste: pasteEnabled
-          ? () => pasteText(SelectionChangedCause.toolbar)
-          : null,
-      onSelectAll: selectAllEnabled
-          ? () => selectAll(SelectionChangedCause.toolbar)
-          : null,
-      onLookUp: lookUpEnabled
-          ? () => lookUpSelection(SelectionChangedCause.toolbar)
-          : null,
-      onSearchWeb: searchWebEnabled
-          ? () => searchWebForSelection(SelectionChangedCause.toolbar)
-          : null,
-      onShare: shareEnabled
-          ? () => shareSelection(SelectionChangedCause.toolbar)
-          : null,
-      onLiveTextInput: liveTextInputEnabled ? () {} : null,
+    return [
+      ..._spellCheckSuggestionItems,
+      ...EditableText.getEditableButtonItems(
+        clipboardStatus: (_clipboardStatus != null)
+            ? _clipboardStatus!.value
+            : null,
+        onCopy: copyEnabled
+            ? () => copySelection(SelectionChangedCause.toolbar)
+            : null,
+        onCut: cutEnabled
+            ? () => cutSelection(SelectionChangedCause.toolbar)
+            : null,
+        onPaste: pasteEnabled
+            ? () => pasteText(SelectionChangedCause.toolbar)
+            : null,
+        onSelectAll: selectAllEnabled
+            ? () => selectAll(SelectionChangedCause.toolbar)
+            : null,
+        onLookUp: lookUpEnabled
+            ? () => lookUpSelection(SelectionChangedCause.toolbar)
+            : null,
+        onSearchWeb: searchWebEnabled
+            ? () => searchWebForSelection(SelectionChangedCause.toolbar)
+            : null,
+        onShare: shareEnabled
+            ? () => shareSelection(SelectionChangedCause.toolbar)
+            : null,
+        onLiveTextInput: liveTextInputEnabled ? () {} : null,
+      ),
+    ];
+  }
+
+  List<ContextMenuButtonItem> get _spellCheckSuggestionItems {
+    final selection = textEditingValue.selection;
+    final span = _suggestionSpanAt(selection.extentOffset) ??
+        _suggestionSpanAt(selection.start);
+    if (span == null) {
+      return const [];
+    }
+    return [
+      for (final suggestion in span.suggestions)
+        ContextMenuButtonItem(
+          label: suggestion,
+          type: ContextMenuButtonType.custom,
+          onPressed: () => _replaceMisspelling(span, suggestion),
+        ),
+    ];
+  }
+
+  SuggestionSpan? _suggestionSpanAt(int offset) {
+    if (offset < 0) return null;
+    for (final span in _spellCheckResults?.suggestionSpans ?? const []) {
+      if (offset >= span.range.start && offset <= span.range.end) return span;
+    }
+    return null;
+  }
+
+  void _replaceMisspelling(SuggestionSpan span, String replacement) {
+    controller.replaceText(
+      span.range.start,
+      span.range.end - span.range.start,
+      replacement,
+      TextSelection.collapsed(offset: span.range.start + replacement.length),
     );
+    hideToolbar();
   }
 
   /// Look up the current selection,
@@ -622,7 +677,7 @@ class QuillRawEditorState extends EditorState
               ? const EdgeInsets.all(16)
               : null,
           embedBuilder: widget.config.embedBuilder,
-          textSpanBuilder: widget.config.textSpanBuilder,
+          textSpanBuilder: _spellCheckTextSpanBuilder,
           linkActionPicker: _linkActionPicker,
           onLaunchUrl: widget.config.onLaunchUrl,
           cursorCont: _cursorCont,
@@ -662,7 +717,7 @@ class QuillRawEditorState extends EditorState
       line: node,
       textDirection: _textDirection,
       embedBuilder: widget.config.embedBuilder,
-      textSpanBuilder: widget.config.textSpanBuilder,
+      textSpanBuilder: _spellCheckTextSpanBuilder,
       customStyleBuilder: widget.config.customStyleBuilder,
       customRecognizerBuilder: widget.config.customRecognizerBuilder,
       styles: _styles!,
@@ -690,6 +745,67 @@ class QuillRawEditorState extends EditorState
       _getDecoration(node, _styles, attrs),
     );
     return editableTextLine;
+  }
+
+  InlineSpan _spellCheckTextSpanBuilder(
+    BuildContext context,
+    Node node,
+    int nodeOffset,
+    String text,
+    TextStyle? style,
+    GestureRecognizer? recognizer,
+  ) {
+    final span = widget.config.textSpanBuilder(
+      context,
+      node,
+      nodeOffset,
+      text,
+      style,
+      recognizer,
+    );
+    if (span is! TextSpan || span.text != text || text.isEmpty) return span;
+
+    final start = node.documentOffset + nodeOffset;
+    final end = start + text.length;
+    final intersections = (_spellCheckResults?.suggestionSpans ?? const [])
+        .where((result) => result.range.start < end && result.range.end > start)
+        .toList();
+    if (intersections.isEmpty) return span;
+
+    final children = <InlineSpan>[];
+    var cursor = start;
+    for (final result in intersections) {
+      final misspelledStart = math.max(start, result.range.start);
+      final misspelledEnd = math.min(end, result.range.end);
+      if (cursor < misspelledStart) {
+        children.add(
+          TextSpan(
+            text: text.substring(cursor - start, misspelledStart - start),
+            recognizer: span.recognizer,
+          ),
+        );
+      }
+      children.add(
+        TextSpan(
+          text: text.substring(
+            misspelledStart - start,
+            misspelledEnd - start,
+          ),
+          style: widget.config.spellCheckConfiguration.misspelledTextStyle,
+          recognizer: span.recognizer,
+        ),
+      );
+      cursor = misspelledEnd;
+    }
+    if (cursor < end) {
+      children.add(
+        TextSpan(
+          text: text.substring(cursor - start),
+          recognizer: span.recognizer,
+        ),
+      );
+    }
+    return TextSpan(style: span.style, children: children);
   }
 
   HorizontalSpacing _getHorizontalSpacingForLine(
@@ -824,7 +940,42 @@ class QuillRawEditorState extends EditorState
   }
 
   void _didChangeTextEditingValueListener() {
+    _scheduleSpellCheck();
     _didChangeTextEditingValue(controller.ignoreFocusOnTextChange);
+  }
+
+  void _scheduleSpellCheck() {
+    _spellCheckTimer?.cancel();
+    if (!_spellCheckEnabled) {
+      if (_spellCheckResults != null) {
+        setState(() => _spellCheckResults = null);
+      }
+      return;
+    }
+    _spellCheckTimer = Timer(
+      const Duration(milliseconds: 350),
+      _performSpellCheck,
+    );
+  }
+
+  Future<void> _performSpellCheck() async {
+    final text = textEditingValue.text;
+    final locale = Localizations.maybeLocaleOf(context);
+    if (!_spellCheckEnabled || locale == null || text.isEmpty) {
+      if (mounted) setState(() => _spellCheckResults = null);
+      return;
+    }
+    final service = _spellCheckService ??=
+        widget.config.spellCheckConfiguration.spellCheckService ??
+        DefaultSpellCheckService();
+    List<SuggestionSpan>? suggestions;
+    try {
+      suggestions = await service.fetchSpellCheckSuggestions(locale, text);
+    } on Object {
+      return;
+    }
+    if (!mounted || suggestions == null || textEditingValue.text != text) return;
+    setState(() => _spellCheckResults = SpellCheckResults(text, suggestions));
   }
 
   @override
@@ -880,6 +1031,7 @@ class QuillRawEditorState extends EditorState
     }
 
     controller.addListener(_didChangeTextEditingValueListener);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleSpellCheck());
 
     if (!widget.config.readOnly) {
       // listen to composing range changes
@@ -939,6 +1091,13 @@ class QuillRawEditorState extends EditorState
   void didUpdateWidget(QuillRawEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
 
+    if (widget.config.spellCheckConfiguration !=
+            oldWidget.config.spellCheckConfiguration ||
+        widget.config.readOnly != oldWidget.config.readOnly) {
+      _spellCheckService = null;
+      _scheduleSpellCheck();
+    }
+
     _cursorCont.show.value = widget.config.showCursor;
     _cursorCont.style = widget.config.cursorStyle;
 
@@ -986,6 +1145,7 @@ class QuillRawEditorState extends EditorState
 
   @override
   void dispose() {
+    _spellCheckTimer?.cancel();
     closeConnectionIfNeeded();
     _keyboardVisibilitySubscription?.cancel();
     HardwareKeyboard.instance.removeHandler(_hardwareKeyboardEvent);

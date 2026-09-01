@@ -48,6 +48,13 @@ class QuillEditorConfig {
     this.maxContentWidth,
     this.customStyles,
     this.textCapitalization = TextCapitalization.sentences,
+    this.spellCheckConfiguration = const SpellCheckConfiguration(
+      misspelledTextStyle: TextStyle(
+        decoration: TextDecoration.underline,
+        decorationColor: Colors.red,
+        decorationStyle: TextDecorationStyle.wavy,
+      ),
+    ),
     this.keyboardAppearance,
     this.scrollPhysics,
     this.onLaunchUrl,
@@ -313,6 +320,12 @@ class QuillEditorConfig {
   /// Defaults to [TextCapitalization.sentences]. Must not be `null`.
   final TextCapitalization textCapitalization;
 
+  /// Configures native spelling, misspelling decoration and suggestions.
+  ///
+  /// Uses [DefaultSpellCheckService] when no service is supplied. Pass
+  /// [SpellCheckConfiguration.disabled] to disable spell checking.
+  final SpellCheckConfiguration spellCheckConfiguration;
+
   /// The appearance of the keyboard.
   ///
   /// This setting is only honored on iOS devices.
@@ -513,6 +526,7 @@ class QuillEditorConfig {
     DefaultStyles? customStyles,
     bool? expands,
     TextCapitalization? textCapitalization,
+    SpellCheckConfiguration? spellCheckConfiguration,
     Brightness? keyboardAppearance,
     ScrollPhysics? scrollPhysics,
     ValueChanged<String>? onLaunchUrl,
@@ -576,6 +590,8 @@ class QuillEditorConfig {
       customStyles: customStyles ?? this.customStyles,
       expands: expands ?? this.expands,
       textCapitalization: textCapitalization ?? this.textCapitalization,
+      spellCheckConfiguration:
+          spellCheckConfiguration ?? this.spellCheckConfiguration,
       keyboardAppearance: keyboardAppearance ?? this.keyboardAppearance,
       scrollPhysics: scrollPhysics ?? this.scrollPhysics,
       onLaunchUrl: onLaunchUrl ?? this.onLaunchUrl,
